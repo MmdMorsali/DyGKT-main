@@ -44,7 +44,7 @@ def evaluate_model_link_classification(model_name: str, model: nn.Module, neighb
                 evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices],\
                 evaluate_data.labels[evaluate_data_indices]
            
-            if model_name in ['DyGKT','QIKT','IEKT','IPKT','DIMKT','DKT','AKT','CTNCM','simpleKT']:
+            if model_name in ['RAG4DyG','DyGKT','QIKT','IEKT','IPKT','DIMKT','DKT','AKT','CTNCM','simpleKT']:
                 
                 batch_src_node_embeddings,batch_dst_node_embeddings = \
                         model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
