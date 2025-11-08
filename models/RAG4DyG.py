@@ -13,9 +13,9 @@ class RAG4DyG(nn.Module):
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
-                 num_neighbors: int = 50,
+                 num_neighbors: int = 100,
                  time_dim: int = 16,
-                 dropout: float = 0.5,
+                 dropout: float = 0.1,
                  device: str = 'cuda:0',
                  **kwargs):
         
