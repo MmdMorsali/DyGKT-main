@@ -23,9 +23,9 @@ class RAG4DyG(nn.Module):
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
-                 time_dim: int = 16,
-                 num_neighbors: int = 50,
-                 dropout: float = 0.5,
+                 time_dim: int = 8,
+                 num_neighbors: int = 100,
+                 dropout: float = 0.1,
                  device: str = 'cuda:0',
                  **kwargs):
 
@@ -134,3 +134,4 @@ class RAG4DyG(nn.Module):
         dst_emb = self.output_layer(dst_emb)
 
         return self.dropout_layer(src_emb), self.dropout_layer(dst_emb)
+
