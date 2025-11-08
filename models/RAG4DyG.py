@@ -1,8 +1,7 @@
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
+from torch_geometric.nn import GATConv
 from utils.utils import NeighborSampler
 from models.modules import TimeDualDecayEncoder
 
@@ -13,9 +12,9 @@ class RAG4DyG(nn.Module):
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
-                 num_neighbors: int = 100,
+                 num_neighbors: int = 50,
                  time_dim: int = 16,
-                 dropout: float = 0.1,
+                 dropout: float = 0.5,
                  device: str = 'cuda:0',
                  **kwargs):
         
@@ -43,8 +42,8 @@ class RAG4DyG(nn.Module):
         # Time encoder (using the same as DyGKT)
         self.time_encoder = TimeDualDecayEncoder(time_dim=self.time_dim)
 
-        # --- Use GCN instead of GAT for static graph support ---
-        self.gcn_layer = GCNConv(self.node_dim, self.node_dim)  # Use GCNConv here for static graphs
+        # Graph Attention Network (GAT) for fusing the augmented sequence of interactions
+        self.gat_layer = GATConv(self.node_dim, self.node_dim, heads=8, dropout=dropout)
         
         self.output_layer = nn.Linear(self.node_dim, self.node_dim, bias=True)
         self.dropout_layer = nn.Dropout(dropout)
@@ -85,7 +84,7 @@ class RAG4DyG(nn.Module):
             num_neighbors=self.num_neighbors
         )
         
-        # Convert numpy arrays to tensors on the correct device (move here)
+        # Convert numpy arrays to tensors on the correct device
         retrieved_node_ids = torch.from_numpy(retrieved_node_ids).long().to(self.device)
         retrieved_edge_ids = torch.from_numpy(retrieved_edge_ids).long().to(self.device)
         retrieved_times = torch.from_numpy(retrieved_times).float().to(self.device)
@@ -97,8 +96,8 @@ class RAG4DyG(nn.Module):
         # --- Step 2: Feature Engineering (Inspired by DyGKT) ---
         
         # 2a. Base Embeddings for the retrieved sequence
-        retrieved_node_features = self.node_raw_features[retrieved_node_ids].to(self.device)  # Move to device
-        retrieved_edge_features = self.edge_raw_features[retrieved_edge_ids].to(self.device)  # Move to device
+        retrieved_node_features = self.node_raw_features[retrieved_node_ids]
+        retrieved_edge_features = self.edge_raw_features[retrieved_edge_ids]
 
         retrieved_node_emb = self.projection_layer['feature_linear'](retrieved_node_features)
         retrieved_edge_emb = self.projection_layer['edge'](retrieved_edge_features)
@@ -115,7 +114,7 @@ class RAG4DyG(nn.Module):
         skill_similarity_feat = (retrieved_skill_ids == current_question_skills.unsqueeze(1)).float().unsqueeze(-1)
         skill_similarity_emb = self.projection_layer['struct'](skill_similarity_feat)
         
-        # --- Step 3: Fusion using Graph Convolution (GCN) ---
+        # --- Step 3: Fusion using Graph Attention Network ---
         
         # Combine all features for each item in the retrieved sequence
         fused_interaction_sequence = (retrieved_node_emb + 
@@ -124,15 +123,17 @@ class RAG4DyG(nn.Module):
                                       co_occurrence_emb + 
                                       skill_similarity_emb)
 
-        # Apply GCN for richer interaction modeling
-        edge_index = torch.arange(fused_interaction_sequence.size(0)).unsqueeze(0).repeat(2, 1).to(self.device)  # Create dummy edges for GCN
-        gcn_out = self.gcn_layer(fused_interaction_sequence, edge_index)  # Pass to GCNConv layer
+        # Apply GAT for richer interaction modeling
+        gat_out = self.gat_layer(fused_interaction_sequence, edge_index=None)  # Assuming you are passing the proper edge index
         
-        # The final hidden state `src_emb` is the retrieval-augmented student embedding.
-        src_emb = gcn_out.mean(dim=1)  # or gcn_out.squeeze(0) depending on your requirements
-        
+        # Ensure the batch size is consistent here by taking mean or squeeze as needed
+        if gat_out.dim() == 3:  # This is the expected shape for GATConv output
+            src_emb = gat_out.mean(dim=1)  # Mean pooling over the nodes
+        else:
+            src_emb = gat_out.squeeze(0)  # Squeeze if needed
+
         # --- Step 4: Get Current Question Embedding ---
-        dst_node_features = self.node_raw_features[current_question_ids].to(self.device)  # Move to device
+        dst_node_features = self.node_raw_features[current_question_ids]
         dst_emb = self.projection_layer['feature_linear'](dst_node_features)
 
         # Apply final layers
@@ -140,8 +141,7 @@ class RAG4DyG(nn.Module):
         dst_emb = self.output_layer(dst_emb)
 
         # Contrastive learning loss: Query is src_emb, positive is dst_emb, negative samples from retrieval
-        negative_emb = self.node_raw_features[retrieved_node_ids[torch.randint(0, len(retrieved_node_ids), (src_emb.size(0),))]].to(self.device)
+        negative_emb = self.node_raw_features[retrieved_node_ids[torch.randint(0, len(retrieved_node_ids), (src_emb.size(0),))]]
         loss = self.contrastive_loss(src_emb, dst_emb, negative_emb)
 
         return self.dropout_layer(src_emb), self.dropout_layer(dst_emb), loss
-
