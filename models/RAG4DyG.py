@@ -1,21 +1,21 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import GCNConv, GATConv
 from utils.utils import NeighborSampler
 from models.modules import TimeDualDecayEncoder
 
 class RAG4DyG(nn.Module):
     """
     An improved Retrieval-Augmented Generation model for Knowledge Tracing.
-
-    This version is a hybrid that integrates the powerful feature engineering from DyGKT 
-    into the RAG sequence-processing framework.
+    This version integrates feature engineering from DyGKT into the RAG framework.
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
-                 num_neighbors: int = 50,
+                 num_neighbors: int = 100,
                  time_dim: int = 16,
-                 dropout: float = 0.5,
+                 dropout: float = 0.1,
                  device: str = 'cuda:0',
                  **kwargs):
         
@@ -37,20 +37,15 @@ class RAG4DyG(nn.Module):
             'feature_linear': nn.Linear(self.node_raw_features.shape[1], self.node_dim, bias=True),
             'edge': nn.Linear(self.edge_raw_features.shape[1], self.edge_dim, bias=True),
             'time': nn.Linear(self.time_dim, self.node_dim, bias=True),
-            # This 'struct' layer is crucial for modeling co-occurrence and skill similarity
             'struct': nn.Linear(1, self.node_dim, bias=True),
         })
 
         # Time encoder (using the same as DyGKT)
         self.time_encoder = TimeDualDecayEncoder(time_dim=self.time_dim)
 
-        # The GRU module for fusing the augmented sequence of interactions
-        self.retrieval_fusion_module = nn.GRU(
-            input_size=self.node_dim, # Input will be the combined feature vector for each historical interaction
-            hidden_size=self.node_dim,
-            batch_first=True
-        )
-
+        # Graph Attention Network (GAT) for fusing the augmented sequence of interactions
+        self.gat_layer = GATConv(self.node_dim, self.node_dim, heads=8, dropout=dropout)
+        
         self.output_layer = nn.Linear(self.node_dim, self.node_dim, bias=True)
         self.dropout_layer = nn.Dropout(dropout)
 
@@ -85,7 +80,7 @@ class RAG4DyG(nn.Module):
         current_question_skills = self.node_raw_features[current_question_ids][:, 0].long()
 
         # --- Step 2: Feature Engineering (Inspired by DyGKT) ---
-
+        
         # 2a. Base Embeddings for the retrieved sequence
         retrieved_node_features = self.node_raw_features[retrieved_node_ids]
         retrieved_edge_features = self.edge_raw_features[retrieved_edge_ids]
@@ -105,23 +100,22 @@ class RAG4DyG(nn.Module):
         skill_similarity_feat = (retrieved_skill_ids == current_question_skills.unsqueeze(1)).float().unsqueeze(-1)
         skill_similarity_emb = self.projection_layer['struct'](skill_similarity_feat)
         
-        # --- Step 3: Fusion ---
+        # --- Step 3: Fusion using Graph Attention Network ---
         
         # Combine all features for each item in the retrieved sequence
-        # This is the key step that gives the model rich context for every historical interaction
         fused_interaction_sequence = (retrieved_node_emb + 
                                       retrieved_edge_emb + 
                                       retrieved_time_emb + 
                                       co_occurrence_emb + 
                                       skill_similarity_emb)
 
-        # The GRU processes the sequence to produce a fused student state.
+        # Apply GAT for richer interaction modeling
+        gat_out = self.gat_layer(fused_interaction_sequence, edge_index=None)  # Assuming you are passing the proper edge index
+        
         # The final hidden state `src_emb` is the retrieval-augmented student embedding.
-        _, src_emb = self.retrieval_fusion_module(fused_interaction_sequence)
-        src_emb = src_emb.squeeze(0)
+        src_emb = gat_out.mean(dim=1)  # or gat_out.squeeze(0) depending on your requirements
         
         # --- Step 4: Get Current Question Embedding ---
-        # Project the features of the current destination node (question).
         dst_node_features = self.node_raw_features[current_question_ids]
         dst_emb = self.projection_layer['feature_linear'](dst_node_features)
 
@@ -130,3 +124,4 @@ class RAG4DyG(nn.Module):
         dst_emb = self.output_layer(dst_emb)
 
         return self.dropout_layer(src_emb), self.dropout_layer(dst_emb)
+
