@@ -1,8 +1,8 @@
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np 
 import torch.nn.functional as F
-from torch_geometric.nn import GATConv
+from torch_geometric.nn import GCNConv  # Changed from GATConv to GCNConv for static graphs
 from utils.utils import NeighborSampler
 from models.modules import TimeDualDecayEncoder
 
@@ -13,9 +13,9 @@ class RAG4DyG(nn.Module):
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
-                 num_neighbors: int = 100,
+                 num_neighbors: int = 50,
                  time_dim: int = 16,
-                 dropout: float = 0.1,
+                 dropout: float = 0.5,
                  device: str = 'cuda:0',
                  **kwargs):
         
@@ -43,8 +43,8 @@ class RAG4DyG(nn.Module):
         # Time encoder (using the same as DyGKT)
         self.time_encoder = TimeDualDecayEncoder(time_dim=self.time_dim)
 
-        # Graph Attention Network (GAT) for fusing the augmented sequence of interactions
-        self.gat_layer = GATConv(self.node_dim, self.node_dim, heads=8, dropout=dropout)
+        # Use GCNConv for static graph (replaces GATConv for static graphs)
+        self.gcn_layer = GCNConv(self.node_dim, self.node_dim, dropout=dropout)
         
         self.output_layer = nn.Linear(self.node_dim, self.node_dim, bias=True)
         self.dropout_layer = nn.Dropout(dropout)
@@ -71,7 +71,8 @@ class RAG4DyG(nn.Module):
     def compute_src_dst_node_temporal_embeddings(self, src_node_ids: np.ndarray,
                                                  edge_ids: np.ndarray,
                                                  node_interact_times: np.ndarray,
-                                                 dst_node_ids: np.ndarray):
+                                                 dst_node_ids: np.ndarray,
+                                                 edge_index: torch.Tensor):  # Ensure edge_index is passed as a parameter
         """
         Computes retrieval-augmented student embeddings and standard question embeddings.
         This version incorporates DyGKT's feature engineering.
@@ -115,7 +116,7 @@ class RAG4DyG(nn.Module):
         skill_similarity_feat = (retrieved_skill_ids == current_question_skills.unsqueeze(1)).float().unsqueeze(-1)
         skill_similarity_emb = self.projection_layer['struct'](skill_similarity_feat)
         
-        # --- Step 3: Fusion using Graph Attention Network ---
+        # --- Step 3: Fusion using Graph Convolutional Network (GCN) ---
         
         # Combine all features for each item in the retrieved sequence
         fused_interaction_sequence = (retrieved_node_emb + 
@@ -124,15 +125,12 @@ class RAG4DyG(nn.Module):
                                       co_occurrence_emb + 
                                       skill_similarity_emb)
 
-        # Apply GAT for richer interaction modeling
-        gat_out = self.gat_layer(fused_interaction_sequence, edge_index=None)  # Assuming you are passing the proper edge index
-        
-        # Ensure the batch size is consistent here by taking mean or squeeze as needed
-        if gat_out.dim() == 3:  # This is the expected shape for GATConv output
-            src_emb = gat_out.mean(dim=1)  # Mean pooling over the nodes
-        else:
-            src_emb = gat_out.squeeze(0)  # Squeeze if needed
+        # Apply GCN for richer interaction modeling (static graph)
+        gcn_out = self.gcn_layer(fused_interaction_sequence, edge_index)  # Now passing edge_index
 
+        # The final hidden state `src_emb` is the retrieval-augmented student embedding.
+        src_emb = gcn_out.mean(dim=1)  # or gcn_out.squeeze(0) depending on your requirements
+        
         # --- Step 4: Get Current Question Embedding ---
         dst_node_features = self.node_raw_features[current_question_ids]
         dst_emb = self.projection_layer['feature_linear'](dst_node_features)
@@ -146,4 +144,3 @@ class RAG4DyG(nn.Module):
         loss = self.contrastive_loss(src_emb, dst_emb, negative_emb)
 
         return self.dropout_layer(src_emb), self.dropout_layer(dst_emb), loss
-
