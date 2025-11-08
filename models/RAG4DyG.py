@@ -53,6 +53,21 @@ class RAG4DyG(nn.Module):
         """Set the neighbor sampler to handle the 'Retrieval' step."""
         self.neighbor_sampler = neighbor_sampler
 
+    def time_decay(self, query_time, candidate_time, lambda_decay=0.1):
+        """
+        Time-decay function to prioritize temporally relevant samples.
+        """
+        return torch.exp(-lambda_decay * torch.abs(query_time - candidate_time))
+
+    def contrastive_loss(self, query_emb, positive_emb, negative_emb, temperature=0.1):
+        """
+        Contrastive loss to help the model differentiate between positive and negative examples.
+        """
+        pos_sim = F.cosine_similarity(query_emb, positive_emb)
+        neg_sim = F.cosine_similarity(query_emb, negative_emb)
+        loss = -torch.log(torch.exp(pos_sim / temperature) / (torch.exp(pos_sim / temperature) + torch.exp(neg_sim / temperature)))
+        return loss
+
     def compute_src_dst_node_temporal_embeddings(self, src_node_ids: np.ndarray,
                                                  edge_ids: np.ndarray,
                                                  node_interact_times: np.ndarray,
@@ -123,5 +138,8 @@ class RAG4DyG(nn.Module):
         src_emb = self.output_layer(src_emb)
         dst_emb = self.output_layer(dst_emb)
 
-        return self.dropout_layer(src_emb), self.dropout_layer(dst_emb)
+        # Contrastive learning loss: Query is src_emb, positive is dst_emb, negative samples from retrieval
+        negative_emb = self.node_raw_features[retrieved_node_ids[torch.randint(0, len(retrieved_node_ids), (src_emb.size(0),))]]
+        loss = self.contrastive_loss(src_emb, dst_emb, negative_emb)
 
+        return self.dropout_layer(src_emb), self.dropout_layer(dst_emb), loss
