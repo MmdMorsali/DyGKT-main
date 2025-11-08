@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np 
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv
 from utils.utils import NeighborSampler
@@ -12,9 +13,9 @@ class RAG4DyG(nn.Module):
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
-                 num_neighbors: int = 50,
+                 num_neighbors: int = 100,
                  time_dim: int = 16,
-                 dropout: float = 0.5,
+                 dropout: float = 0.1,
                  device: str = 'cuda:0',
                  **kwargs):
         
@@ -145,3 +146,4 @@ class RAG4DyG(nn.Module):
         loss = self.contrastive_loss(src_emb, dst_emb, negative_emb)
 
         return self.dropout_layer(src_emb), self.dropout_layer(dst_emb), loss
+
