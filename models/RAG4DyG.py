@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv  # Changed from GATConv to GCNConv for static graphs
+from torch_geometric.nn import GCNConv  # Use GCNConv for static graphs
 from utils.utils import NeighborSampler
 from models.modules import TimeDualDecayEncoder
 
@@ -44,7 +44,7 @@ class RAG4DyG(nn.Module):
         self.time_encoder = TimeDualDecayEncoder(time_dim=self.time_dim)
 
         # Use GCNConv for static graph (replaces GATConv for static graphs)
-        self.gcn_layer = GCNConv(self.node_dim, self.node_dim, dropout=dropout)
+        self.gcn_layer = GCNConv(self.node_dim, self.node_dim)
         
         self.output_layer = nn.Linear(self.node_dim, self.node_dim, bias=True)
         self.dropout_layer = nn.Dropout(dropout)
