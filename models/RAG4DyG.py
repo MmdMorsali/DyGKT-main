@@ -1,4 +1,4 @@
-%%writefile models/RAG4DyG.py
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -123,3 +123,4 @@ class RAG4DyG(nn.Module):
         dst_emb = self.output_layer(dst_emb)
 
         return self.dropout_layer(src_emb), self.dropout_layer(dst_emb)
+
