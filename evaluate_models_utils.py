@@ -9,8 +9,8 @@ from utils.DataLoader import Data
 
 
 def evaluate_model_link_classification(model_name: str, model: nn.Module, neighbor_sampler: NeighborSampler, evaluate_idx_data_loader: DataLoader,
-                                   evaluate_neg_edge_sampler: NegativeEdgeSampler, evaluate_data: Data, loss_func: nn.Module,
-                                   num_neighbors: int = 20, time_gap: int = 2000):
+                                     evaluate_neg_edge_sampler: NegativeEdgeSampler, evaluate_data: Data, loss_func: nn.Module,
+                                     num_neighbors: int = 20, time_gap: int = 2000):
     """
     evaluate models on the link classification task
     :param model_name: str, name of the model
@@ -40,53 +40,53 @@ def evaluate_model_link_classification(model_name: str, model: nn.Module, neighb
         for batch_idx, evaluate_data_indices in enumerate(evaluate_idx_data_loader_tqdm):
             evaluate_data_indices = evaluate_data_indices.numpy()
             batch_src_node_ids, batch_dst_node_ids, batch_node_interact_times, batch_edge_ids, batch_edge_labels = \
-                evaluate_data.src_node_ids[evaluate_data_indices],  evaluate_data.dst_node_ids[evaluate_data_indices], \
+                evaluate_data.src_node_ids[evaluate_data_indices], evaluate_data.dst_node_ids[evaluate_data_indices], \
                 evaluate_data.node_interact_times[evaluate_data_indices], evaluate_data.edge_ids[evaluate_data_indices],\
                 evaluate_data.labels[evaluate_data_indices]
-           
+            
             if model_name in ['RAG4DyG','DyGKT','QIKT','IEKT','IPKT','DIMKT','DKT','AKT','CTNCM','simpleKT']:
                 
                 batch_src_node_embeddings,batch_dst_node_embeddings = \
-                        model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                          edge_ids = batch_edge_ids,
-                                                                          node_interact_times=batch_node_interact_times,
-                                                                          dst_node_ids=batch_dst_node_ids)
+                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                    edge_ids = batch_edge_ids,
+                                                                    node_interact_times=batch_node_interact_times,
+                                                                    dst_node_ids=batch_dst_node_ids)
 
             elif model_name in ['TGAT']:
                 # get temporal embedding of source and destination nodes
                 # two Tensors, with shape (batch_size, node_feat_dim)
                 batch_src_node_embeddings, batch_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                      dst_node_ids=batch_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times,
-                                                                      num_neighbors=num_neighbors)
+                  model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                    dst_node_ids=batch_dst_node_ids,
+                                                                    node_interact_times=batch_node_interact_times,
+                                                                    num_neighbors=num_neighbors)
 
-               
+                
             elif model_name in ['TGN']:
                 # get temporal embedding of source and destination nodes
                 # two Tensors, with shape (batch_size, node_feat_dim)
                 batch_src_node_embeddings, batch_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                      dst_node_ids=batch_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times,
-                                                                      edge_ids=batch_edge_ids,
-                                                                      edges_are_positive=True,
-                                                                      num_neighbors=num_neighbors)
-            
+                  model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                    dst_node_ids=batch_dst_node_ids,
+                                                                    node_interact_times=batch_node_interact_times,
+                                                                    edge_ids=batch_edge_ids,
+                                                                    edges_are_positive=True,
+                                                                    num_neighbors=num_neighbors)
+               
 
             elif model_name in ['DyGFormer']:
                 # get temporal embedding of source and destination nodes
                 # two Tensors, with shape (batch_size, node_feat_dim)
                 batch_src_node_embeddings, batch_dst_node_embeddings = \
-                    model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
-                                                                      dst_node_ids=batch_dst_node_ids,
-                                                                      node_interact_times=batch_node_interact_times)
+                  model[0].compute_src_dst_node_temporal_embeddings(src_node_ids=batch_src_node_ids,
+                                                                    dst_node_ids=batch_dst_node_ids,
+                                                                    node_interact_times=batch_node_act_times)
 
             else:
                 raise ValueError(f"Wrong value for model_name {model_name}!")
             # get positive and negative probabilities, shape (batch_size, )
             predicts = model[1](batch_src_node_embeddings,batch_dst_node_embeddings).squeeze(dim=-1).sigmoid()
-            labels = torch.tensor(batch_edge_labels, dtype=torch.float32,device=predicts.device)            
+            labels = torch.tensor(batch_edge_labels, dtype=torch.float32,device=predicts.device)           
             
             loss = loss_func(input=predicts, target=labels)
             evaluate_losses.append(loss.item())
@@ -102,4 +102,3 @@ def evaluate_model_link_classification(model_name: str, model: nn.Module, neighb
         evaluate_metrics.append(get_link_classification_metrics(predicts=evaluate_predict, labels=evaluate_label))
 
     return evaluate_losses, evaluate_metrics
-
