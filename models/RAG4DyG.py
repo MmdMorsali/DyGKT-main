@@ -9,9 +9,8 @@ from models.modules import TimeDualDecayEncoder
 
 class RAG4DyG(nn.Module):
     """
-    A High-Performance Retrieval-Augmented model based on the DyGKT architecture.
-    This version includes Layer Normalization and has a corrected function signature
-    to match the existing training and evaluation framework.
+    Final Corrected Version: A High-Performance RAG model based on DyGKT.
+    The method signature now perfectly matches the framework's function calls.
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
@@ -54,17 +53,14 @@ class RAG4DyG(nn.Module):
         time_feats = self.projection_layer['time'](self.time_encoder(nodes_neighbor_times))
         return node_feats, edge_feats, time_feats
 
+    # *** SIGNATURE AND ARGUMENT ORDER CORRECTED ***
     def compute_src_dst_node_temporal_embeddings(self, src_node_ids: np.ndarray,
-                                                 dst_node_ids: np.ndarray,
+                                                 edge_ids: np.ndarray,
                                                  node_interact_times: np.ndarray,
-                                                 edge_ids: np.ndarray = None):
-        """
-        *** CORRECTED FUNCTION SIGNATURE ***
-        This now matches the calling signature from the original framework.
-        """
+                                                 dst_node_ids: np.ndarray):
+        
         batch_size = len(src_node_ids)
         
-        # Step 1: Retrieval
         src_neighbor_node_ids, src_neighbor_edge_ids, src_neighbor_times = self.neighbor_sampler.get_historical_neighbors(
             src_node_ids, node_interact_times, self.num_neighbors
         )
@@ -74,7 +70,6 @@ class RAG4DyG(nn.Module):
         src_neighbor_times = torch.from_numpy(src_neighbor_times).float().to(self.device)
         dst_node_ids_tensor = torch.from_numpy(dst_node_ids).long().to(self.device)
 
-        # Step 2: Feature Engineering
         retrieved_node_feat, retrieved_edge_feat, retrieved_time_feat = self.get_features(
             src_neighbor_node_ids, src_neighbor_edge_ids, src_neighbor_times
         )
@@ -92,7 +87,6 @@ class RAG4DyG(nn.Module):
         
         fused_history_features = self.feature_fusion_norm(fused_history_features)
 
-        # Step 3: Graph Construction and Fusion
         graph_data_list = []
         for i in range(batch_size):
             graph_node_features = fused_history_features[i]
@@ -110,7 +104,6 @@ class RAG4DyG(nn.Module):
         gnn_output = torch.relu(self.gnn_fusion(batched_graph.x, batched_graph.edge_index))
         src_emb = global_mean_pool(gnn_output, batched_graph.batch)
 
-        # Step 4: Destination Embedding
         dst_node_features = self.node_raw_features[dst_node_ids_tensor]
         dst_emb = self.projection_layer['feature_linear'](dst_node_features)
 
