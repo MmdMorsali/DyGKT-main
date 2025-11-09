@@ -9,11 +9,12 @@ from models.modules import TimeDualDecayEncoder
 
 class RAG4DyG(nn.Module):
     """
-    Final Corrected Version: A High-Performance RAG model based on DyGKT.
-    The method signature now perfectly matches the framework's function calls.
+    True RAG Version for DyGKT Framework.
+    This model is designed to use the pre-computed retriever indices.
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
+                 retrieval_pool_features: dict, # Accepts the pre-computed pool
                  time_dim: int = 16,
                  num_neighbors: int = 50,
                  dropout: float = 0.5,
@@ -27,6 +28,9 @@ class RAG4DyG(nn.Module):
         self.node_raw_features = torch.from_numpy(node_raw_features.astype(np.float32)).to(device)
         self.edge_raw_features = torch.from_numpy(edge_raw_features.astype(np.float32)).to(device)
 
+        # Store the retrieval pool features as tensors on the correct device
+        self.retrieved_nodes = torch.from_numpy(retrieval_pool_features['nodes']).long().to(device)
+        
         self.node_dim = 64
         self.edge_dim = 64
         self.time_dim = time_dim
@@ -48,62 +52,74 @@ class RAG4DyG(nn.Module):
         self.neighbor_sampler = neighbor_sampler
         
     def get_features(self, nodes_neighbor_ids, nodes_edge_ids, nodes_neighbor_times):
+        # This function now needs to handle the extra 'K_RETRIEVE' dimension
+        # The input shape will be (batch_size, K, num_neighbors)
         node_feats = self.projection_layer['feature_linear'](self.node_raw_features[nodes_neighbor_ids])
-        edge_feats = self.projection_layer['edge'](self.edge_raw_features[nodes_edge_ids][:, :, 0].unsqueeze(-1))
+        
+        # We can't use edge features from the pool easily, so we zero them out for demonstrations
+        # A more complex implementation could store these too, but this is a robust start.
+        edge_feats = torch.zeros_like(node_feats)
+
+        # We also cannot easily get time features, so we use the student's own history for that
         time_feats = self.projection_layer['time'](self.time_encoder(nodes_neighbor_times))
         return node_feats, edge_feats, time_feats
 
-    # *** SIGNATURE AND ARGUMENT ORDER CORRECTED ***
+    # The signature now accepts 'retrieved_indices'
     def compute_src_dst_node_temporal_embeddings(self, src_node_ids: np.ndarray,
-                                                 edge_ids: np.ndarray,
+                                                 dst_node_ids: np.ndarray,
                                                  node_interact_times: np.ndarray,
-                                                 dst_node_ids: np.ndarray):
+                                                 retrieved_indices: np.ndarray,
+                                                 edge_ids: np.ndarray = None):
         
         batch_size = len(src_node_ids)
-        
-        src_neighbor_node_ids, src_neighbor_edge_ids, src_neighbor_times = self.neighbor_sampler.get_historical_neighbors(
-            src_node_ids, node_interact_times, self.num_neighbors
-        )
-        
-        src_neighbor_node_ids = torch.from_numpy(src_neighbor_node_ids).long().to(self.device)
-        src_neighbor_edge_ids = torch.from_numpy(src_neighbor_edge_ids).long().to(self.device)
-        src_neighbor_times = torch.from_numpy(src_neighbor_times).float().to(self.device)
         dst_node_ids_tensor = torch.from_numpy(dst_node_ids).long().to(self.device)
+        retrieved_indices = torch.from_numpy(retrieved_indices).long().to(self.device)
+        
+        # --- Step 1: Use pre-computed indices to retrieve demonstrations from the pool ---
+        # Shape: (batch_size, K_RETRIEVE, num_neighbors)
+        demonstration_nodes = self.retrieved_nodes[retrieved_indices]
 
-        retrieved_node_feat, retrieved_edge_feat, retrieved_time_feat = self.get_features(
-            src_neighbor_node_ids, src_neighbor_edge_ids, src_neighbor_times
-        )
+        # We need features for these demonstrations.
+        # This part is simplified: we only use node features from the demos.
+        # Shape: (batch_size, K_RETRIEVE, num_neighbors, node_dim)
+        demo_node_feat = self.projection_layer['feature_linear'](self.node_raw_features[demonstration_nodes])
         
-        co_occurrence_feat = (src_neighbor_node_ids == dst_node_ids_tensor.unsqueeze(1)).float().unsqueeze(-1)
-        co_occurrence_emb = self.projection_layer['struct'](co_occurrence_feat)
+        # --- Step 2: Feature Engineering for Demonstrations ---
+        # Reshape for broadcasting: (batch_size, 1, 1, node_dim)
+        current_skill_ids = self.node_raw_features[dst_node_ids_tensor][:, 0].long().view(batch_size, 1, 1)
+        demo_skill_ids = self.node_raw_features[demonstration_nodes][..., 0].long()
         
-        retrieved_skill_ids = self.node_raw_features[src_neighbor_node_ids][:, :, 0].long()
-        current_skill_ids = self.node_raw_features[dst_node_ids_tensor][:, 0].long()
-        skill_similarity_feat = (retrieved_skill_ids == current_skill_ids.unsqueeze(1)).float().unsqueeze(-1)
-        skill_similarity_emb = self.projection_layer['struct'](skill_similarity_feat)
+        skill_sim_feat = (demo_skill_ids == current_skill_ids).float().unsqueeze(-1)
+        skill_sim_emb = self.projection_layer['struct'](skill_sim_feat)
         
-        fused_history_features = (retrieved_node_feat + retrieved_edge_feat + 
-                                  retrieved_time_feat + co_occurrence_emb + skill_similarity_emb)
+        # Combine features for demonstrations
+        fused_demo_features = demo_node_feat + skill_sim_emb
         
+        # --- Step 3: Fuse the K demonstrations into one history ---
+        # We average the features across the K demonstrations.
+        # Shape: (batch_size, num_neighbors, node_dim)
+        fused_history_features = fused_demo_features.mean(dim=1)
+        
+        # Normalize the fused features
         fused_history_features = self.feature_fusion_norm(fused_history_features)
 
+        # --- Step 4: Graph Construction and Student Embedding ---
         graph_data_list = []
         for i in range(batch_size):
-            graph_node_features = fused_history_features[i]
-            
-            num_valid_interactions = (src_neighbor_node_ids[i] > 0).sum()
+            num_valid_interactions = (demonstration_nodes[i, 0] > 0).sum()
             if num_valid_interactions < 2:
                 edge_index = torch.empty((2, 0), dtype=torch.long, device=self.device)
             else:
                 nodes_in_graph = torch.arange(num_valid_interactions, device=self.device)
                 edge_index = torch.stack([nodes_in_graph[:-1], nodes_in_graph[1:]], dim=0)
 
-            graph_data_list.append(Data(x=graph_node_features, edge_index=edge_index))
+            graph_data_list.append(Data(x=fused_history_features[i], edge_index=edge_index))
 
         batched_graph = Batch.from_data_list(graph_data_list).to(self.device)
         gnn_output = torch.relu(self.gnn_fusion(batched_graph.x, batched_graph.edge_index))
         src_emb = global_mean_pool(gnn_output, batched_graph.batch)
 
+        # --- Step 5: Destination (Question) Embedding ---
         dst_node_features = self.node_raw_features[dst_node_ids_tensor]
         dst_emb = self.projection_layer['feature_linear'](dst_node_features)
 
