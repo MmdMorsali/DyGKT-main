@@ -12,14 +12,6 @@ class RAG4DyG(nn.Module):
     A High-Performance Retrieval-Augmented model based on the DyGKT architecture.
     This version includes Layer Normalization and has a corrected function signature
     to match the existing training and evaluation framework.
-
-    Workflow:
-    1.  Retrieval: Retrieve student's historical interactions.
-    2.  Feature Engineering: Compute rich DyGKT features (node, edge, time, struct).
-    3.  Stabilized Fusion: Sum the features and apply LayerNorm.
-    4.  Graph Fusion: Construct and process a graph from the history to get a
-        fused student knowledge embedding (src_emb).
-    5.  Prediction: Use the fused embedding for link prediction.
     """
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
@@ -68,9 +60,7 @@ class RAG4DyG(nn.Module):
                                                  edge_ids: np.ndarray = None):
         """
         *** CORRECTED FUNCTION SIGNATURE ***
-        This now matches the calling signature from both the training and evaluation loops.
-        The unused `retrieved_indices` argument has been removed.
-        The `edge_ids` argument is accepted but can be None during evaluation for negative samples.
+        This now matches the calling signature from the original framework.
         """
         batch_size = len(src_node_ids)
         
