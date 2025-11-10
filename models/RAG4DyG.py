@@ -15,9 +15,9 @@ class RAG4DyG(nn.Module):
     def __init__(self, node_raw_features: np.ndarray,
                  edge_raw_features: np.ndarray,
                  retrieval_pool_features: dict, # Accepts the pre-computed pool
-                 time_dim: int = 32,
-                 num_neighbors: int = 50,
-                 dropout: float = 0.5,
+                 time_dim: int = 8,
+                 num_neighbors: int = 100,
+                 dropout: float = 0.1,
                  device: str = 'cuda:0',
                  **kwargs):
 
@@ -31,8 +31,8 @@ class RAG4DyG(nn.Module):
         # Store the retrieval pool features as tensors on the correct device
         self.retrieved_nodes = torch.from_numpy(retrieval_pool_features['nodes']).long().to(device)
         
-        self.node_dim = 128
-        self.edge_dim = 128
+        self.node_dim = 32
+        self.edge_dim = 32
         self.time_dim = time_dim
 
         self.projection_layer = nn.ModuleDict({
@@ -127,4 +127,5 @@ class RAG4DyG(nn.Module):
         dst_emb = self.output_layer(dst_emb)
 
         return self.dropout_layer(src_emb), self.dropout_layer(dst_emb)
+
 
